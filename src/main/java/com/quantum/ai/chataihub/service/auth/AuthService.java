@@ -98,7 +98,7 @@ public class AuthService {
     }
 
     // 3. 密码登录
-    public String loginByPassword(String email, String password) {
+    public String loginByPassword(String email, String password, String clientIp) {
         SysUser user = sysUserService.getByEmail(email);
         if (user == null) {
             throw new BusinessException(ResultCode.USER_NOT_EXIST, "用户不存在");
@@ -121,14 +121,20 @@ public class AuthService {
             throw new BusinessException(ResultCode.PASSWORD_ERROR, "密码错误，剩余" + leftCount + "次机会");
         }
 
+        // IP重复登录校验
+        checkLoginIp(user.getId(), clientIp);
+
         // 登录成功，重置错误次数
         sysUserService.resetErrorCount(user.getId());
+
+        // 保存登录IP
+        saveLoginIp(user.getId(), clientIp);
 
         return generateAndStoreToken(user.getId());
     }
 
     // 4. 验证码登录
-    public String loginByCode(String email, String code) {
+    public String loginByCode(String email, String code, String clientIp) {
         SysUser user = sysUserService.getByEmail(email);
         if (user == null) {
             throw new BusinessException(ResultCode.USER_NOT_EXIST, "用户不存在");
@@ -137,11 +143,17 @@ public class AuthService {
         // 校验验证码
         validateCode(email, code);
 
+        // IP重复登录校验
+        checkLoginIp(user.getId(), clientIp);
+
         // 登录成功，重置错误次数并解锁
         sysUserService.resetErrorCount(user.getId());
 
         // 删除验证码
         redisUtil.delete(RedisKeys.EMAIL_CODE_PREFIX + email);
+
+        // 保存登录IP
+        saveLoginIp(user.getId(), clientIp);
 
         return generateAndStoreToken(user.getId());
     }
@@ -179,5 +191,35 @@ public class AuthService {
 
     public Long getUserIdFromToken(String token) {
         return jwtUtil.getUserIdFromToken(token);
+    }
+
+    /**
+     * 校验IP：同一用户+同一IP已登录，拒绝重复登录
+     */
+    private void checkLoginIp(Long userId, String currentIp) {
+        String key = RedisKeys.LOGIN_IP_KEY + userId;
+        String loggedIp = redisUtil.get(key);
+
+        // 已登录 + IP相同 → 拦截
+        if (loggedIp != null && loggedIp.equals(currentIp)) {
+            throw new BusinessException(ResultCode.FAIL, "当前IP已登录，请勿重复登录！");
+        }
+    }
+
+    /**
+     * 保存登录IP到Redis
+     */
+    private void saveLoginIp(Long userId, String ip) {
+        String key = RedisKeys.LOGIN_IP_KEY + userId;
+        redisUtil.set(key, ip, RedisKeys.LOGIN_IP_EXPIRE, TimeUnit.SECONDS);
+    }
+
+    /**
+     * 登出功能
+     */
+    public void logout(String token) {
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        redisUtil.delete(RedisKeys.USER_TOKEN_PREFIX + userId);
+        redisUtil.delete(RedisKeys.LOGIN_IP_KEY + userId);
     }
 }

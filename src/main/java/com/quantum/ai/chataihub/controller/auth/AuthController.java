@@ -9,9 +9,11 @@ import com.quantum.ai.chataihub.dto.auth.SendCodeRequest;
 import com.quantum.ai.chataihub.entity.SysUser;
 import com.quantum.ai.chataihub.exception.BusinessException;
 import com.quantum.ai.chataihub.service.auth.AuthService;
+import com.quantum.ai.chataihub.util.IpUtil;
 import com.quantum.ai.chataihub.util.JwtUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -31,11 +33,13 @@ public class AuthController {
 
     private final AuthService authService;
     private final JwtUtil jwtUtil;
+    private final IpUtil ipUtil;
 
     // 发送邮箱验证码
     @Operation(summary = "发送邮箱验证码")
     @PostMapping("/send-email-code")
-    public Result<Void> sendEmailCode(@Valid @RequestBody SendCodeRequest request) {
+    public Result<Void> sendEmailCode(@Valid @RequestBody SendCodeRequest request, HttpServletRequest httpServletRequest) {
+        String ip = ipUtil.getClientIp(httpServletRequest);
         authService.sendEmailCode(request.getEmail());
         return Result.ok();
     }
@@ -55,22 +59,30 @@ public class AuthController {
     // 邮箱密码登录
     @Operation(summary = "邮箱密码登录")
     @PostMapping("/login/password")
-    public Result<Map<String, Object>> loginByPassword(@Valid @RequestBody PasswordLoginRequest request) {
-        String token = authService.loginByPassword(request.getEmail(), request.getPassword());
+    public Result<Map<String, Object>> loginByPassword(@Valid @RequestBody PasswordLoginRequest request, HttpServletRequest httpRequest) {
+        // 获取真实公网IP
+        String clientIp = ipUtil.getClientIp(httpRequest);
+        //  传递IP给Service做校验
+        String token = authService.loginByPassword(request.getEmail(), request.getPassword(), clientIp);
+
         Long userId = jwtUtil.getUserIdFromToken(token);
         SysUser user = authService.getCurrentUser(userId);
         Map<String, Object> data = new HashMap<>();
         data.put("token", token);
         data.put("userId", userId);
-        data.put("userName", user.getEmail()); // 示例，可扩展昵称字段
+        data.put("userName", user.getEmail());
         return Result.ok(data);
     }
 
     // 邮箱验证码登录
     @Operation(summary = "邮箱验证码登录")
     @PostMapping("/login/code")
-    public Result<Map<String, Object>> loginByCode(@Valid @RequestBody CodeLoginRequest request) {
-        String token = authService.loginByCode(request.getEmail(), request.getCode());
+    public Result<Map<String, Object>> loginByCode(@Valid @RequestBody CodeLoginRequest request, HttpServletRequest httpRequest) {
+        // 获取真实公网IP
+        String clientIp = ipUtil.getClientIp(httpRequest);
+        //  传递IP给Service做校验
+        String token = authService.loginByCode(request.getEmail(), request.getCode(), clientIp);
+
         Long userId = jwtUtil.getUserIdFromToken(token);
         Map<String, Object> data = new HashMap<>();
         data.put("token", token);
@@ -96,5 +108,14 @@ public class AuthController {
         data.put("email", user.getEmail());
         data.put("createTime", user.getCreateTime());
         return Result.ok(data);
+    }
+
+    // 登出功能
+    @Operation(summary = "登出功能")
+    @PostMapping("/logout")
+    public Result<Void> logout(@RequestHeader("Authorization") String authHeader) {
+        String token = authHeader.substring(7);
+        authService.logout(token);
+        return Result.ok();
     }
 }

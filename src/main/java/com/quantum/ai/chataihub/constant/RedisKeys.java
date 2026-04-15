@@ -11,4 +11,8 @@ public class RedisKeys {
     public static final String EMAIL_FREQ_PREFIX = "email:freq:";
     // 用户登录凭证
     public static final String USER_TOKEN_PREFIX = "user:token:";
+    // 登录IP
+    public static final String LOGIN_IP_KEY = "login:ip:";
+    // 登录IP过期时间（7天）
+    public static final long LOGIN_IP_EXPIRE = 60 * 60 * 24 * 7;
 }
