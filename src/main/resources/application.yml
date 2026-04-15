@@ -1,0 +1,61 @@
+# 加载环境变量文件
+spring:
+  config:
+    import: optional:file:.env[.properties]
+
+  # 应用名称
+  application:
+    name: chat-ai-hub
+
+  # 启用开发环境
+  profiles:
+    active: dev
+
+  # AI配置
+  ai:
+    deepseek:
+      api-key: ${DEEPSEEK_APIKEY:}
+      base-url: ${DEEPSEEK_BASE_URL:}
+
+  # 邮箱配置 ✅ 修正大小写错误
+  mail:
+    host: smtp.qq.com
+    port: 587
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    default-encoding: UTF-8  # 新增：默认编码，防止乱码
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+        # 可选优化：连接超时配置
+        smtp.connectiontimeout: 5000
+        smtp.writetimeout: 5000
+
+# mybatis plus相关配置（完全正确）
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  global-config:
+    db-config:
+      id-type: auto  # 主键自增，匹配你之前的建表语句
+  configuration:
+    map-underscore-to-camel-case: true  # 数据库下划线→实体驼峰，必备配置
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl  # 控制台打印SQL
+
+jwt:
+  secret: ${JWT_SECRET:}
+  expiration: 7200  # 2小时，单位：秒
+
+app:
+  security:
+    password-max-retry: 5  # 密码最大重试次数
+    lock-duration: 3600    # 锁定1小时
+    code-expire: 300       # 验证码5分钟过期
+    code-resend-interval: 60 # 验证码60秒重发间隔
+
+# 服务端口
+server:
+  port: 8080
