@@ -15,11 +15,16 @@ import com.quantum.ai.chataihub.vo.ai.SessionListVO;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +38,7 @@ import java.util.concurrent.TimeUnit;
 @Tag(name = "DeepSeek AI服务")
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class DeepSeekService {
 
     private final OkHttpClient client = new OkHttpClient.Builder()
@@ -90,31 +96,161 @@ public class DeepSeekService {
             // 填充默认配置
             fillDefaultConfig(request);
 
-            // 调用AI接口
-            Request okRequest = buildRequest(request);
-            try (Response response = client.newCall(okRequest).execute()) {
-                if (!response.isSuccessful()) {
-                    throw new BusinessException(ResultCode.MODEL_CALL_ERROR, "DeepSeek接口调用失败");
-                }
+            // 调用AI接口（含重试逻辑）
+            DeepSeekChatResponse aiResp = callWithRetry(request, 3);
 
-                assert response.body() != null;
-                DeepSeekChatResponse aiResp = objectMapper.readValue(response.body().string(), DeepSeekChatResponse.class);
+            // 保存AI回复
+            ChatMessage assistantMsg = aiResp.getChoices().getFirst().getMessage();
+            history.add(assistantMsg);
 
-                // 保存AI回复
-                ChatMessage assistantMsg = aiResp.getChoices().getFirst().getMessage();
-                history.add(assistantMsg);
+            // 更新Redis缓存
+            redisTemplate.opsForValue().set(redisKey, history, RedisKeys.DEEPSEEK_CACHE_EXPIRE, TimeUnit.MINUTES);
 
-                // 更新Redis缓存
-                redisTemplate.opsForValue().set(redisKey, history, RedisKeys.LOGIN_IP_EXPIRE, TimeUnit.MINUTES);
+            // 异步持久化到MongoDB
+            aiChatAsyncSaveService.asyncSaveChatRecord(userId, sessionId, history);
 
-                // 异步持久化到MongoDB
-                aiChatAsyncSaveService.asyncSaveChatRecord(userId, sessionId, history);
-
-                return aiResp;
-            }
+            return aiResp;
+        } catch (BusinessException e) {
+            throw e;
         } catch (Exception e) {
             throw new BusinessException(ResultCode.FAIL, "DeepSeek对话异常：" + e.getMessage());
         }
+    }
+
+    /**
+     * 流式对话（SSE）
+     */
+    @SuppressWarnings("unchecked")
+    public SseEmitter chatStream(DeepSeekChatRequest request, HttpServletRequest httpServletRequest) {
+        SseEmitter emitter = new SseEmitter(120_000L); // 2分钟超时
+
+        try {
+            // 获取用户ID
+            String tokenStr = httpServletRequest.getHeader("Authorization").replace("Bearer ", "");
+            Long userId = jwtUtil.getUserIdFromToken(tokenStr);
+
+            // 处理会话ID
+            String sessionId = request.getSessionId();
+            if (!StringUtils.hasText(sessionId)) {
+                sessionId = aiChatAsyncSaveService.createDefaultSession(userId);
+            }
+
+            String redisKey = RedisKeys.DEEPSEEK_CACHE_KEY + sessionId;
+
+            // 校验用户消息
+            List<ChatMessage> newMessages = request.getMessages();
+            if (newMessages == null || newMessages.isEmpty()) {
+                emitter.completeWithError(new BusinessException(ResultCode.NO_MESSAGE, "请发送消息"));
+                return emitter;
+            }
+            ChatMessage lastUserMessage = newMessages.getLast();
+
+            // 读取会话历史
+            List<ChatMessage> history = (List<ChatMessage>) redisTemplate.opsForValue().get(redisKey);
+            if (history == null) {
+                history = aiChatAsyncSaveService.getSessionMessages(sessionId);
+                if (history == null || history.isEmpty()) {
+                    history = new ArrayList<>();
+                    ChatMessage system = new ChatMessage();
+                    system.setRole(DeepSeekConstants.ROLE_SYSTEM);
+                    system.setContent(DeepSeekConstants.SYSTEM_PROMPT);
+                    history.add(system);
+                }
+            }
+
+            history.add(lastUserMessage);
+            request.setMessages(history);
+
+            // 填充默认配置并启用流式
+            fillDefaultConfig(request);
+            request.setStream(true);
+
+            // 异步执行流式请求
+            final List<ChatMessage> finalHistory = history;
+            final String finalSessionId = sessionId;
+            final Long finalUserId = userId;
+            final String finalRedisKey = redisKey;
+
+            Request okRequest = buildRequest(request);
+            client.newCall(okRequest).enqueue(new Callback() {
+                @Override
+                public void onFailure(Call call, java.io.IOException e) {
+                    try {
+                        emitter.send(SseEmitter.event().name("error").data("网络异常：" + e.getMessage()));
+                    } catch (Exception ignored) {
+                    }
+                    emitter.completeWithError(e);
+                }
+
+                @Override
+                public void onResponse(Call call, Response response) {
+                    StringBuilder fullContent = new StringBuilder();
+                    try {
+                        if (!response.isSuccessful()) {
+                            String errorBody = response.body() != null ? response.body().string() : "";
+                            BusinessException ex = parseApiError(response.code(), errorBody);
+                            emitter.send(SseEmitter.event().name("error").data(ex.getMessage()));
+                            emitter.complete();
+                            return;
+                        }
+
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(response.body().byteStream(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                if (line.isEmpty()) continue;
+                                if (!line.startsWith("data: ")) continue;
+
+                                String data = line.substring(6).trim();
+                                if ("[DONE]".equals(data)) {
+                                    emitter.send(SseEmitter.event().name("done").data("[DONE]"));
+                                    break;
+                                }
+
+                                // 解析 SSE chunk，提取 delta content
+                                try {
+                                    var node = objectMapper.readTree(data);
+                                    var choices = node.get("choices");
+                                    if (choices != null && choices.isArray() && !choices.isEmpty()) {
+                                        var delta = choices.get(0).get("delta");
+                                        if (delta != null && delta.has("content")) {
+                                            String content = delta.get("content").asText();
+                                            if (content != null && !content.isEmpty()) {
+                                                fullContent.append(content);
+                                                emitter.send(SseEmitter.event().data(content));
+                                            }
+                                        }
+                                    }
+                                } catch (Exception parseEx) {
+                                    log.warn("解析SSE chunk失败: {}", data);
+                                }
+                            }
+                        }
+
+                        // 流结束后保存完整回复
+                        if (!fullContent.isEmpty()) {
+                            ChatMessage assistantMsg = new ChatMessage();
+                            assistantMsg.setRole(DeepSeekConstants.ROLE_ASSISTANT);
+                            assistantMsg.setContent(fullContent.toString());
+                            finalHistory.add(assistantMsg);
+
+                            redisTemplate.opsForValue().set(finalRedisKey, finalHistory,
+                                    RedisKeys.DEEPSEEK_CACHE_EXPIRE, TimeUnit.MINUTES);
+                            aiChatAsyncSaveService.asyncSaveChatRecord(finalUserId, finalSessionId, finalHistory);
+                        }
+
+                        emitter.complete();
+                    } catch (Exception e) {
+                        log.error("SSE流处理异常", e);
+                        emitter.completeWithError(e);
+                    }
+                }
+            });
+        } catch (Exception e) {
+            emitter.completeWithError(e);
+        }
+
+        return emitter;
     }
 
     // 获取用户会话列表
@@ -146,6 +282,74 @@ public class DeepSeekService {
             throw new BusinessException(ResultCode.FAIL, "DeepSeek对话异常：" + e.getMessage());
         }
 
+    }
+
+    /**
+     * 调用 DeepSeek API（含指数退避重试，针对 429/503 等暂时性错误）
+     */
+    private DeepSeekChatResponse callWithRetry(DeepSeekChatRequest request, int maxRetries) {
+        Request okRequest = buildRequest(request);
+        int retries = 0;
+        while (true) {
+            try (Response response = client.newCall(okRequest).execute()) {
+                int code = response.code();
+                String responseBody = response.body() != null ? response.body().string() : "";
+
+                if (response.isSuccessful()) {
+                    return objectMapper.readValue(responseBody, DeepSeekChatResponse.class);
+                }
+
+                // 可重试的状态码: 429 (限流), 503 (服务不可用), 502 (网关错误)
+                if ((code == 429 || code == 502 || code == 503) && retries < maxRetries) {
+                    retries++;
+                    long waitMs = (long) Math.pow(2, retries) * 1000; // 指数退避: 2s, 4s, 8s
+                    Thread.sleep(waitMs);
+                    continue;
+                }
+
+                // 不可重试或重试耗尽，解析错误信息
+                throw parseApiError(code, responseBody);
+            } catch (BusinessException e) {
+                throw e;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException(ResultCode.MODEL_CALL_ERROR, "请求被中断");
+            } catch (java.net.SocketTimeoutException e) {
+                if (retries < maxRetries) {
+                    retries++;
+                    continue;
+                }
+                throw new BusinessException(ResultCode.MODEL_CALL_TIMEOUT, "DeepSeek接口调用超时，请稍后重试");
+            } catch (Exception e) {
+                throw new BusinessException(ResultCode.MODEL_CALL_ERROR, "DeepSeek接口调用失败：" + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 解析 DeepSeek API 错误响应
+     */
+    private BusinessException parseApiError(int httpCode, String responseBody) {
+        try {
+            var errorNode = objectMapper.readTree(responseBody);
+            if (errorNode.has("error")) {
+                var error = errorNode.get("error");
+                String type = error.has("type") ? error.get("type").asText() : "unknown";
+                String message = error.has("message") ? error.get("message").asText() : "未知错误";
+
+                if ("authentication_error".equals(type)) {
+                    return new BusinessException(ResultCode.API_KEY_ERROR, "API Key 无效: " + message);
+                } else if ("insufficient_balance".equals(type)) {
+                    return new BusinessException(ResultCode.API_KEY_BALANCE_ERROR, "API 余额不足: " + message);
+                } else if ("rate_limit_exceeded".equals(type)) {
+                    return new BusinessException(ResultCode.MODEL_CALL_ERROR, "请求过于频繁，请稍后重试");
+                } else {
+                    return new BusinessException(ResultCode.MODEL_CALL_ERROR, "DeepSeek错误[" + type + "]: " + message);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return new BusinessException(ResultCode.MODEL_CALL_ERROR, "DeepSeek接口调用失败(HTTP " + httpCode + ")");
     }
 
     /**

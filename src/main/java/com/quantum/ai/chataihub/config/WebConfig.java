@@ -38,7 +38,7 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
-                .allowedOriginPatterns("*")           // 允许所有来源（前端地址）
+                .allowedOriginPatterns("*")           // TODO 生产环境应限制为具体域名，如 "https://yourdomain.com"
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS") // 允许所有请求方法
                 .allowedHeaders("*")                   // 允许所有请求头
                 .allowCredentials(true)                // 允许携带Cookie/Token

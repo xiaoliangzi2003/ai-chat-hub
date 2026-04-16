@@ -10,7 +10,9 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 
@@ -32,6 +34,12 @@ public class DeepSeekController {
     @RequestMapping("/chat")
     public Result<DeepSeekChatResponse> chat(@RequestBody DeepSeekChatRequest request, HttpServletRequest httpServletRequest) {
         return Result.ok(deepSeekService.chat(request, httpServletRequest));
+    }
+
+    @Operation(summary = "DeepSeek流式对话(SSE)")
+    @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter chatStream(@RequestBody DeepSeekChatRequest request, HttpServletRequest httpServletRequest) {
+        return deepSeekService.chatStream(request, httpServletRequest);
     }
 
     @Operation(summary = "清空指定会话记忆")

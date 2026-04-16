@@ -12,7 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+
 
 import java.time.LocalDateTime;
 import java.util.Date;
@@ -117,12 +117,12 @@ public class AiChatAsyncSaveService {
      * 【异步】定时任务同步Redis数据（异步执行，不阻塞调度线程）
      */
     @Async("aiChatAsyncExecutor")
-    public void asyncSyncRedisToMongoDB(Long userId, List<ChatMessage> messageList) {
+    public void asyncSyncRedisToMongoDB(Long userId, String sessionId, List<ChatMessage> messageList) {
         try {
-            AiChatSession session = getOrCreateSession(userId);
-            batchSaveMessages(session.getId(), userId, messageList);
+            batchSaveMessages(sessionId, userId, messageList);
+            log.info("✅ 同步会话[{}]到MongoDB成功", sessionId);
         } catch (Exception e) {
-            log.error("同步用户[{}]会话失败：{}", userId, e.getMessage());
+            log.error("同步会话[{}]失败：{}", sessionId, e.getMessage());
         }
     }
 
@@ -130,7 +130,6 @@ public class AiChatAsyncSaveService {
      * 【异步】根据会话Id清空用户会话
      */
     @Async("aiChatAsyncExecutor")
-    @Transactional(rollbackFor = Exception.class)
     public void asyncDeleteSessionBySessionId(String sessionId) {
         try {
             AiChatSession session = sessionRepository.findById(sessionId).orElse(null);
@@ -158,9 +157,15 @@ public class AiChatAsyncSaveService {
     }
 
     private void batchSaveMessages(String sessionId, Long userId, List<ChatMessage> messageList) {
-        // 先删除旧消息，再保存新消息（避免重复）
-        messageRepository.deleteBySessionId(sessionId);
-        List<AiChatMessage> mongoMessages = messageList.stream().map(msg -> {
+        // 查询已有消息数量，只保存新增的消息（增量保存，避免全量删除重插的数据丢失风险）
+        long existingCount = messageRepository.countBySessionId(sessionId);
+        if (existingCount >= messageList.size()) {
+            return; // 没有新消息需要保存
+        }
+
+        // 只保存新增的消息
+        List<ChatMessage> newMessages = messageList.subList((int) existingCount, messageList.size());
+        List<AiChatMessage> mongoMessages = newMessages.stream().map(msg -> {
             AiChatMessage mongoMsg = new AiChatMessage();
             mongoMsg.setSessionId(sessionId);
             mongoMsg.setUserId(userId);

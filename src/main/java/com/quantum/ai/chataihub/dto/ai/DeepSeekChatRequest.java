@@ -3,6 +3,8 @@ package com.quantum.ai.chataihub.dto.ai;
 import com.quantum.ai.chataihub.entity.ai.chat.ChatMessage;
 import com.quantum.ai.chataihub.entity.ai.tool.Tool;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
@@ -17,6 +19,8 @@ import java.util.List;
 @Schema(name = "DeepSeek对话请求")
 public class DeepSeekChatRequest {
 
+    @NotEmpty(message = "消息列表不能为空")
+    @Size(max = 200, message = "单次消息数量不能超过200条")
     @Schema(description = "消息列表（支持system/user/assistant/tool）", requiredMode = Schema.RequiredMode.REQUIRED)
     private List<ChatMessage> messages;
 

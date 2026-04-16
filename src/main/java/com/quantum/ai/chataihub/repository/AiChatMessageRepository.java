@@ -20,4 +20,6 @@ public interface AiChatMessageRepository extends MongoRepository<AiChatMessage, 
     List<AiChatMessage> findBySessionIdOrderByCreateTimeAsc(String sessionId);
 
     void deleteBySessionId(String sessionId);
+
+    long countBySessionId(String sessionId);
 }

@@ -62,3 +62,12 @@ app:
 # 服务端口
 server:
   port: 8080
+  # 请求大小限制
+  tomcat:
+    max-http-form-post-size: 2MB
+    max-swallow-size: 2MB
+
+# 文件上传大小限制
+spring.servlet.multipart:
+  max-file-size: 10MB
+  max-request-size: 10MB
