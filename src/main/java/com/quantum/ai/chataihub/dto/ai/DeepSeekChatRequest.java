@@ -65,6 +65,9 @@ public class DeepSeekChatRequest {
     @Schema(description = "Top概率")
     private Object top_logprobs;
 
+    @Schema(description = "会话ID")
+    private String sessionId;
+
     @Data
     public static class Thinking {
         private String type = "disabled";

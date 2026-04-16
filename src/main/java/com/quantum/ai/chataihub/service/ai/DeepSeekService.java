@@ -10,12 +10,15 @@ import com.quantum.ai.chataihub.entity.ai.chat.ChatMessage;
 import com.quantum.ai.chataihub.exception.BusinessException;
 import com.quantum.ai.chataihub.util.JwtUtil;
 import com.quantum.ai.chataihub.vo.ai.DeepSeekChatResponse;
+import com.quantum.ai.chataihub.vo.ai.SessionDetailVO;
+import com.quantum.ai.chataihub.vo.ai.SessionListVO;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import okhttp3.*;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -46,56 +49,66 @@ public class DeepSeekService {
 
     public DeepSeekChatResponse chat(DeepSeekChatRequest request, HttpServletRequest httpServletRequest) {
         try {
-            // 获取userId
+            // 获取用户ID
             String token = httpServletRequest.getHeader("Authorization").replace("Bearer ", "");
             Long userId = jwtUtil.getUserIdFromToken(token);
-            String key = RedisKeys.DEEPSEEK_CACHE_KEY + userId;
 
-            // 从请求中取出前端传递的最新消息
+            // 处理会话ID（无则自动创建默认会话）
+            String sessionId = request.getSessionId();
+            if (!StringUtils.hasText(sessionId)) {
+                sessionId = aiChatAsyncSaveService.createDefaultSession(userId);
+            }
+
+            // Redis Key：按会话ID存储（多会话隔离）
+            String redisKey = RedisKeys.DEEPSEEK_CACHE_KEY + sessionId;
+
+            // 校验用户消息
             List<ChatMessage> newMessages = request.getMessages();
             if (newMessages == null || newMessages.isEmpty()) {
                 throw new BusinessException(ResultCode.NO_MESSAGE, "请发送消息");
             }
             ChatMessage lastUserMessage = newMessages.getLast();
 
-            // 从Redis中读取历史记忆
-            List<ChatMessage> history = (List<ChatMessage>) redisTemplate.opsForValue().get(key);
+            // 读取会话历史（Redis优先，无则从MongoDB加载）
+            List<ChatMessage> history = (List<ChatMessage>) redisTemplate.opsForValue().get(redisKey);
             if (history == null) {
-                history = new ArrayList<>();
-                // 首次对话：自动加入系统提示
-                ChatMessage system = new ChatMessage();
-                system.setRole(DeepSeekConstants.ROLE_SYSTEM);
-                system.setContent(DeepSeekConstants.SYSTEM_PROMPT);
-                history.add(system);
+                history = aiChatAsyncSaveService.getSessionMessages(sessionId);
+                if (history == null || history.isEmpty()) {
+                    history = new ArrayList<>();
+                    // 首次对话：添加系统提示
+                    ChatMessage system = new ChatMessage();
+                    system.setRole(DeepSeekConstants.ROLE_SYSTEM);
+                    system.setContent(DeepSeekConstants.SYSTEM_PROMPT);
+                    history.add(system);
+                }
             }
 
-            // 追加最新用户消息
+            // 追加用户消息
             history.add(lastUserMessage);
-
-            // 把完整历史消息设置到请求中
             request.setMessages(history);
 
-            // 填充默认配置（从yml读取，无需手动传）
+            // 填充默认配置
             fillDefaultConfig(request);
 
-            // 调用DeekSeek接口
+            // 调用AI接口
             Request okRequest = buildRequest(request);
-
-            // 发送请求并解析响应
             try (Response response = client.newCall(okRequest).execute()) {
                 if (!response.isSuccessful()) {
-                    throw new BusinessException(ResultCode.MODEL_CALL_ERROR, "DeepSeek接口调用失败：");
+                    throw new BusinessException(ResultCode.MODEL_CALL_ERROR, "DeepSeek接口调用失败");
                 }
 
                 assert response.body() != null;
                 DeepSeekChatResponse aiResp = objectMapper.readValue(response.body().string(), DeepSeekChatResponse.class);
 
-                // 保存AI回复到记忆
+                // 保存AI回复
                 ChatMessage assistantMsg = aiResp.getChoices().getFirst().getMessage();
                 history.add(assistantMsg);
-                redisTemplate.opsForValue().set(key, history, RedisKeys.LOGIN_IP_EXPIRE, TimeUnit.MINUTES);
 
-                aiChatAsyncSaveService.asyncSaveChatRecord(userId, history);
+                // 更新Redis缓存
+                redisTemplate.opsForValue().set(redisKey, history, RedisKeys.LOGIN_IP_EXPIRE, TimeUnit.MINUTES);
+
+                // 异步持久化到MongoDB
+                aiChatAsyncSaveService.asyncSaveChatRecord(userId, sessionId, history);
 
                 return aiResp;
             }
@@ -103,6 +116,21 @@ public class DeepSeekService {
             throw new BusinessException(ResultCode.FAIL, "DeepSeek对话异常：" + e.getMessage());
         }
     }
+
+    // 获取用户会话列表
+    public List<SessionListVO> getSessionList(HttpServletRequest request) {
+        String token = request.getHeader("Authorization").replace("Bearer ", "");
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        return aiChatAsyncSaveService.getSessionListByUserId(userId);
+    }
+
+    // 获取会话详情（历史消息）
+    public SessionDetailVO getSessionDetail(String sessionId, HttpServletRequest request) {
+        String token = request.getHeader("Authorization").replace("Bearer ", "");
+        Long userId = jwtUtil.getUserIdFromToken(token);
+        return aiChatAsyncSaveService.getSessionDetail(sessionId, userId);
+    }
+
 
     private Request buildRequest(DeepSeekChatRequest request) {
         try {
@@ -145,11 +173,25 @@ public class DeepSeekService {
         if (request.getLogprobs() == null) request.setLogprobs(false);
     }
 
-    public void clearMemory(HttpServletRequest request) {
+    public void clearMemory(String sessionId, HttpServletRequest request) {
         String token = request.getHeader("Authorization").replace("Bearer ", "");
-        Long userId = jwtUtil.getUserIdFromToken(token);
-        redisTemplate.delete(RedisKeys.DEEPSEEK_CACHE_KEY + userId);
-        // 异步删除
-        aiChatAsyncSaveService.asyncDeleteSession(userId);
+        jwtUtil.getUserIdFromToken(token); // 校验用户权限
+        // 清空Redis
+        redisTemplate.delete(RedisKeys.DEEPSEEK_CACHE_KEY + sessionId);
+        // 异步删除数据库会话
+        aiChatAsyncSaveService.asyncDeleteSessionBySessionId(sessionId);
+    }
+
+    public SessionListVO createSession(HttpServletRequest request) {
+        try {
+            // 解析用户ID
+            String token = request.getHeader("Authorization").replace("Bearer ", "");
+            Long userId = jwtUtil.getUserIdFromToken(token);
+
+            // 直接创建并返回VO（核心修复，不再查列表）
+            return aiChatAsyncSaveService.createNewSession(userId);
+        } catch (Exception e) {
+            throw new BusinessException(ResultCode.FAIL, "新建会话异常：" + e.getMessage());
+        }
     }
 }

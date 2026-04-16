@@ -15,4 +15,10 @@ public interface AiChatSessionRepository extends MongoRepository<AiChatSession, 
 
     // 根据用户ID+会话标题查询（判重）
     AiChatSession findByUserIdAndSessionTitle(Long userId, String title);
+
+    AiChatSession findTopByUserIdOrderByUpdateTimeDesc(Long userId);
+
+    List<AiChatSession> findByUserIdAndIsDeleteFalse(Long userId);
+
+    AiChatSession findByIdAndUserIdAndIsDeleteFalse(String sessionId, Long userId);
 }

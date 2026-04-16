@@ -5,12 +5,16 @@ import com.quantum.ai.chataihub.entity.ai.chat.AiChatSession;
 import com.quantum.ai.chataihub.entity.ai.chat.ChatMessage;
 import com.quantum.ai.chataihub.repository.AiChatMessageRepository;
 import com.quantum.ai.chataihub.repository.AiChatSessionRepository;
+import com.quantum.ai.chataihub.vo.ai.SessionDetailVO;
+import com.quantum.ai.chataihub.vo.ai.SessionListVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeanUtils;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -33,16 +37,80 @@ public class AiChatAsyncSaveService {
      * 实时保存聊天记录
      */
     @Async("aiChatAsyncExecutor")
-    public void asyncSaveChatRecord(Long userId, List<ChatMessage> messageList) {
+    public void asyncSaveChatRecord(Long userId, String sessionId, List<ChatMessage> messageList) {
         try {
-            // 创建/更新会话
-            AiChatSession session = getOrCreateSession(userId);
+            AiChatSession session = getSessionById(sessionId);
+            session.setUpdateTime(LocalDateTime.now());
+            sessionRepository.save(session);
             // 批量保存消息
-            batchSaveMessages(session.getId(), userId, messageList);
-            log.info("✅ 异步保存用户[{}]聊天记录成功", userId);
+            batchSaveMessages(sessionId, userId, messageList);
+            log.info("✅ 保存会话[{}]聊天记录成功", sessionId);
         } catch (Exception e) {
-            log.error("❌ 异步保存聊天记录失败：{}", e.getMessage());
+            log.error("❌ 保存聊天记录失败：{}", e.getMessage());
         }
+    }
+
+    // 创建默认会话
+    public String createDefaultSession(Long userId) {
+        AiChatSession session = sessionRepository.findTopByUserIdOrderByUpdateTimeDesc(userId);
+        if (session != null) {
+            return session.getId();
+        }
+        // 新建默认会话：不手动设置ID，MongoDB自动生成ObjectId
+        session = new AiChatSession();
+        session.setUserId(userId);
+        session.setSessionTitle("默认对话");
+        session.setCreateTime(LocalDateTime.now());
+        session.setUpdateTime(LocalDateTime.now());
+        session.setIsDelete(false);
+        sessionRepository.save(session);
+        return session.getId();
+    }
+
+    // ==================== 新增：获取会话列表 ====================
+    public List<SessionListVO> getSessionListByUserId(Long userId) {
+        List<AiChatSession> sessions = sessionRepository.findByUserIdAndIsDeleteFalse(userId);
+        return sessions.stream().map(session -> {
+            SessionListVO vo = new SessionListVO();
+            BeanUtils.copyProperties(session, vo);
+            vo.setSessionId(session.getId());
+            return vo;
+        }).collect(Collectors.toList());
+    }
+
+    // ==================== 新增：获取会话详情 ====================
+    public SessionDetailVO getSessionDetail(String sessionId, Long userId) {
+        AiChatSession session = sessionRepository.findByIdAndUserIdAndIsDeleteFalse(sessionId, userId);
+        if (session == null) {
+            throw new RuntimeException("会话不存在或无权限");
+        }
+        // 查询历史消息
+        List<AiChatMessage> messageList = messageRepository.findBySessionIdOrderByCreateTimeAsc(sessionId);
+        List<ChatMessage> history = messageList.stream().map(msg -> {
+            ChatMessage chatMsg = new ChatMessage();
+            chatMsg.setRole(msg.getRole());
+            chatMsg.setContent(msg.getContent());
+            chatMsg.setToolCalls(msg.getToolCalls());
+            chatMsg.setToolCallId(msg.getToolCallId());
+            return chatMsg;
+        }).collect(Collectors.toList());
+
+        SessionDetailVO vo = new SessionDetailVO();
+        vo.setSessionId(sessionId);
+        vo.setSessionTitle(session.getSessionTitle());
+        vo.setHistoryMessages(history);
+        return vo;
+    }
+
+    // ==================== 新增：根据sessionId获取历史消息 ====================
+    public List<ChatMessage> getSessionMessages(String sessionId) {
+        List<AiChatMessage> messageList = messageRepository.findBySessionIdOrderByCreateTimeAsc(sessionId);
+        return messageList.stream().map(msg -> {
+            ChatMessage chatMsg = new ChatMessage();
+            chatMsg.setRole(msg.getRole());
+            chatMsg.setContent(msg.getContent());
+            return chatMsg;
+        }).collect(Collectors.toList());
     }
 
     /**
@@ -59,31 +127,21 @@ public class AiChatAsyncSaveService {
     }
 
     /**
-     * 【异步】清空用户会话（补全的方法）
+     * 【异步】根据会话Id清空用户会话
      */
     @Async("aiChatAsyncExecutor")
     @Transactional(rollbackFor = Exception.class)
-    public void asyncDeleteSession(Long userId) {
+    public void asyncDeleteSessionBySessionId(String sessionId) {
         try {
-            List<AiChatSession> sessionList = sessionRepository.findByUserId(userId);
-            if (sessionList.isEmpty()) {
-                System.out.println("用户[" + userId + "]无会话可删除");
-                return;
-            }
+            AiChatSession session = sessionRepository.findById(sessionId).orElse(null);
+            if (session == null) return;
 
-            for (AiChatSession session : sessionList) {
-                // 软删会话
-                session.setIsDelete(true);
-                sessionRepository.save(session);
-                // 删除关联消息
-                List<AiChatMessage> messageList = messageRepository.findBySessionId(session.getId());
-                if (!messageList.isEmpty()) {
-                    messageRepository.deleteAll(messageList);
-                }
-            }
-            System.out.println("✅ 异步删除用户[" + userId + "]会话成功");
+            session.setIsDelete(true);
+            sessionRepository.save(session);
+            messageRepository.deleteBySessionId(sessionId);
+            log.info("✅ 删除会话[{}]成功", sessionId);
         } catch (Exception e) {
-            System.err.println("❌ 异步删除用户[" + userId + "]会话失败：" + e.getMessage());
+            log.error("❌ 删除会话失败：{}", e.getMessage());
         }
     }
 
@@ -93,13 +151,15 @@ public class AiChatAsyncSaveService {
             session = new AiChatSession();
             session.setUserId(userId);
             session.setSessionTitle("默认对话");
-            session.setCreateTime(new Date());
+            session.setCreateTime(LocalDateTime.now());
         }
-        session.setUpdateTime(new Date());
+        session.setUpdateTime(LocalDateTime.now());
         return sessionRepository.save(session);
     }
 
     private void batchSaveMessages(String sessionId, Long userId, List<ChatMessage> messageList) {
+        // 先删除旧消息，再保存新消息（避免重复）
+        messageRepository.deleteBySessionId(sessionId);
         List<AiChatMessage> mongoMessages = messageList.stream().map(msg -> {
             AiChatMessage mongoMsg = new AiChatMessage();
             mongoMsg.setSessionId(sessionId);
@@ -112,7 +172,36 @@ public class AiChatAsyncSaveService {
             mongoMsg.setTokens(0);
             return mongoMsg;
         }).collect(Collectors.toList());
-
         messageRepository.saveAll(mongoMessages);
+    }
+
+    private AiChatSession getSessionById(String sessionId) {
+        return sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new RuntimeException("会话不存在"));
+    }
+
+    /**
+     * 新建独立会话（前端新建会话专用）
+     *
+     * @param userId 用户ID
+     * @return 新会话ID
+     */
+    public SessionListVO createNewSession(Long userId) {
+        AiChatSession session = new AiChatSession();
+        // 不手动设置ID，MongoDB自动生成ObjectId
+        session.setUserId(userId);
+        session.setSessionTitle("新会话 " + String.format("%tR", new Date()));
+        session.setCreateTime(LocalDateTime.now());
+        session.setUpdateTime(LocalDateTime.now());
+        session.setIsDelete(false);
+        // 保存会话
+        AiChatSession savedSession = sessionRepository.save(session);
+
+        // 直接转换为VO返回，不用查列表！
+        SessionListVO vo = new SessionListVO();
+        BeanUtils.copyProperties(savedSession, vo);
+        vo.setSessionId(savedSession.getId());
+
+        return vo;
     }
 }

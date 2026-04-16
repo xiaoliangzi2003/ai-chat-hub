@@ -16,4 +16,8 @@ public interface AiChatMessageRepository extends MongoRepository<AiChatMessage, 
 
     // 批量插入（定时任务用）
     @NotNull <S extends AiChatMessage> List<S> saveAll(@NotNull Iterable<S> entities);
+
+    List<AiChatMessage> findBySessionIdOrderByCreateTimeAsc(String sessionId);
+
+    void deleteBySessionId(String sessionId);
 }
