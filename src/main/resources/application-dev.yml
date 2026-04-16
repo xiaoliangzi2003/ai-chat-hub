@@ -16,7 +16,8 @@ spring:
           max-active: 8
           max-idle: 8
           min-idle: 0
-
+    mongodb:
+      uri: mongodb://localhost:27017/aichat
 
 
 

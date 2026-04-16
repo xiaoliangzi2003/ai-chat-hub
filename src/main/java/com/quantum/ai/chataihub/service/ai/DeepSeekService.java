@@ -42,6 +42,7 @@ public class DeepSeekService {
     private final DeepSeekProperties deepSeekProperties;
     private final JwtUtil jwtUtil;
     private final RedisTemplate<String, Object> redisTemplate;
+    private final AiChatAsyncSaveService aiChatAsyncSaveService;
 
     public DeepSeekChatResponse chat(DeepSeekChatRequest request, HttpServletRequest httpServletRequest) {
         try {
@@ -93,6 +94,8 @@ public class DeepSeekService {
                 ChatMessage assistantMsg = aiResp.getChoices().getFirst().getMessage();
                 history.add(assistantMsg);
                 redisTemplate.opsForValue().set(key, history, RedisKeys.LOGIN_IP_EXPIRE, TimeUnit.MINUTES);
+
+                aiChatAsyncSaveService.asyncSaveChatRecord(userId, history);
 
                 return aiResp;
             }
@@ -146,5 +149,7 @@ public class DeepSeekService {
         String token = request.getHeader("Authorization").replace("Bearer ", "");
         Long userId = jwtUtil.getUserIdFromToken(token);
         redisTemplate.delete(RedisKeys.DEEPSEEK_CACHE_KEY + userId);
+        // 异步删除
+        aiChatAsyncSaveService.asyncDeleteSession(userId);
     }
 }
