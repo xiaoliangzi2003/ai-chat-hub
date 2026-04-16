@@ -152,6 +152,18 @@ public class DeepSeekService {
      * 填充默认配置（从yml读取，简化前端传参）
      */
     private void fillDefaultConfig(DeepSeekChatRequest request) {
+        // 切换快速响应与思考模式
+        String mode = request.getMode();
+        if ("think".equals(mode)) {
+            // 深度思考模式：开启思考 + 切换推理模型
+            request.setModel("deepseek-reasoner");
+            request.setThinking(null);
+        } else {
+            // 快速响应模式（默认）：关闭思考 + 使用配置的标准模型
+            request.setModel(deepSeekProperties.getChat().getOptions().getModel());
+            request.getThinking().setType("disabled");
+        }
+
         if (request.getModel() == null) {
             request.setModel(deepSeekProperties.getChat().getOptions().getModel());
         }

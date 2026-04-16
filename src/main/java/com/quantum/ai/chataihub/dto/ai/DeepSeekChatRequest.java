@@ -68,6 +68,9 @@ public class DeepSeekChatRequest {
     @Schema(description = "会话ID")
     private String sessionId;
 
+    @Schema(description = "对话模式：quick=快速响应(默认)，think=深度思考", example = "quick")
+    private String mode = "quick";
+
     @Data
     public static class Thinking {
         private String type = "disabled";
