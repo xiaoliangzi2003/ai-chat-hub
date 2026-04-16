@@ -1,13 +1,11 @@
 package com.quantum.ai.chataihub.controller.auth;
 
 import com.quantum.ai.chataihub.constant.Result;
-import com.quantum.ai.chataihub.constant.ResultCode;
 import com.quantum.ai.chataihub.dto.auth.CodeLoginRequest;
 import com.quantum.ai.chataihub.dto.auth.PasswordLoginRequest;
 import com.quantum.ai.chataihub.dto.auth.RegisterRequest;
 import com.quantum.ai.chataihub.dto.auth.SendCodeRequest;
-import com.quantum.ai.chataihub.entity.SysUser;
-import com.quantum.ai.chataihub.exception.BusinessException;
+import com.quantum.ai.chataihub.entity.sys.SysUser;
 import com.quantum.ai.chataihub.service.auth.AuthService;
 import com.quantum.ai.chataihub.util.IpUtil;
 import com.quantum.ai.chataihub.util.JwtUtil;
@@ -94,13 +92,7 @@ public class AuthController {
     @Operation(summary = "获取当前用户信息")
     @GetMapping("/current")
     public Result<Map<String, Object>> getCurrentUser(@RequestHeader("Authorization") String authHeader) {
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            throw new BusinessException(ResultCode.UNAUTHORIZED, "未登录或Token已过期");
-        }
         String token = authHeader.substring(7);
-        if (!authService.validateToken(token)) {
-            throw new BusinessException(ResultCode.UNAUTHORIZED, "未登录或Token已过期");
-        }
         Long userId = jwtUtil.getUserIdFromToken(token);
         SysUser user = authService.getCurrentUser(userId);
         Map<String, Object> data = new HashMap<>();

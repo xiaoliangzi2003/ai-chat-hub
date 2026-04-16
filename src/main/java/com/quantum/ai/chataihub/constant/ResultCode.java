@@ -28,4 +28,20 @@ public class ResultCode {
     public static final int EMAIL_ALREADY_REGISTERED = 10006;
     public static final int USER_NOT_EXIST = 10007;
 
+    /**
+     * AI相关响应码
+     *
+     */
+    // API KEY 配置 不正确
+    public static final int API_KEY_ERROR = 20000;
+    // 没有发送消息
+    public static final int NO_MESSAGE = 20001;
+    // API KEY 余额不足
+    public static final int API_KEY_BALANCE_ERROR = 20002;
+    // 模型调用失败
+    public static final int MODEL_CALL_ERROR = 20003;
+    // 模型调用超时
+    public static final int MODEL_CALL_TIMEOUT = 20004;
+    // 超过
+
 }

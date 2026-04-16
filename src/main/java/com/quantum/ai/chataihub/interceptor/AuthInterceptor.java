@@ -24,6 +24,9 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, @NonNull HttpServletResponse response, @NonNull Object handler) {
+        if ("OPTIONS".equals(request.getMethod())) {
+            return true;
+        }
         String authHeader = request.getHeader("Authorization");
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "未登录或Token已过期");

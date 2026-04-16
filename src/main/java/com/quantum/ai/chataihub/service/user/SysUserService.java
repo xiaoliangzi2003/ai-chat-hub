@@ -2,7 +2,7 @@ package com.quantum.ai.chataihub.service.user;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.quantum.ai.chataihub.entity.SysUser;
+import com.quantum.ai.chataihub.entity.sys.SysUser;
 import com.quantum.ai.chataihub.mapper.SysUserMapper;
 import org.springframework.stereotype.Service;
 

@@ -15,4 +15,9 @@ public class RedisKeys {
     public static final String LOGIN_IP_KEY = "login:ip:";
     // 登录IP过期时间（7天）
     public static final long LOGIN_IP_EXPIRE = 60 * 60 * 24 * 7;
+
+    // deepseek对话记忆缓存key
+    public static final String DEEPSEEK_CACHE_KEY = "deepseek:memory:";
+    public static final long DEEPSEEK_CACHE_EXPIRE = 30;
+
 }

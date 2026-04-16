@@ -1,4 +1,4 @@
-package com.quantum.ai.chataihub.entity;
+package com.quantum.ai.chataihub.entity.sys;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

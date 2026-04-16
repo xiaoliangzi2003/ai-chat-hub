@@ -1,7 +1,7 @@
 package com.quantum.ai.chataihub.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.quantum.ai.chataihub.entity.SysUser;
+import com.quantum.ai.chataihub.entity.sys.SysUser;
 import org.apache.ibatis.annotations.Mapper;
 
 /**

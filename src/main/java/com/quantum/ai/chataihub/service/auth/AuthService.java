@@ -2,7 +2,7 @@ package com.quantum.ai.chataihub.service.auth;
 
 import com.quantum.ai.chataihub.constant.RedisKeys;
 import com.quantum.ai.chataihub.constant.ResultCode;
-import com.quantum.ai.chataihub.entity.SysUser;
+import com.quantum.ai.chataihub.entity.sys.SysUser;
 import com.quantum.ai.chataihub.exception.BusinessException;
 import com.quantum.ai.chataihub.service.user.SysUserService;
 import com.quantum.ai.chataihub.util.CodeUtil;
